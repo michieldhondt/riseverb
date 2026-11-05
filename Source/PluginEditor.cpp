@@ -49,11 +49,13 @@ void RiseVerbLookAndFeel::drawRotarySlider (Graphics& g, int x, int y, int w, in
 void RiseVerbLookAndFeel::drawButtonBackground (Graphics& g, Button& b, const Colour&, bool over, bool down)
 {
     auto r = b.getLocalBounds().toFloat().reduced (1.0f);
-    Colour base = b.getToggleState() ? rv::rec : (b.getName() == "primary" ? rv::accent : rv::panelHi);
-    if (b.getName() == "primary" && ! b.getToggleState())
+    const bool isRecord = b.getName() == "record";
+    if (b.getToggleState() && isRecord)
+        g.setColour (rv::rec);
+    else if (b.getToggleState())
         g.setGradientFill (ColourGradient (rv::accent, r.getX(), 0, rv::accent2, r.getRight(), 0, false));
     else
-        g.setColour (base);
+        g.setColour (rv::panelHi);
     if (! b.isEnabled()) g.setOpacity (0.35f);
     g.fillRoundedRectangle (r, 7.0f);
     if (over || down)
@@ -202,7 +204,6 @@ RiseVerbEditor::RiseVerbEditor (RiseVerbProcessor& p)
     : AudioProcessorEditor (&p), proc (p)
 {
     setLookAndFeel (&lnf);
-    setSize (760, 430);
 
     addAndMakeVisible (wave);
 
@@ -225,6 +226,32 @@ RiseVerbEditor::RiseVerbEditor (RiseVerbProcessor& p)
                               });
     };
     previewBtn.onClick = [this] { proc.togglePreview(); };
+
+    // presets
+    presetBox.setTextWhenNothingSelected ("Presets");
+    presetBox.onChange = [this]
+    {
+        const int id = presetBox.getSelectedId();
+        if (id >= 1 && id < 1000) proc.applyFactoryPreset (id - 1);
+        else if (id >= 1000 && id - 1000 < userPresetFiles.size()) proc.loadUserPreset (userPresetFiles[id - 1000]);
+    };
+    addAndMakeVisible (presetBox);
+    savePresetBtn.onClick = [this] { showSaveDialog(); };
+    addAndMakeVisible (savePresetBtn);
+    refreshPresetList();
+
+    // one-click effects
+    for (auto& f : RiseVerbProcessor::fxList)
+    {
+        auto* b = fxButtons.add (new TextButton (f.label));
+        b->setClickingTogglesState (true);
+        addAndMakeVisible (b);
+        fxAttachments.add (new AudioProcessorValueTreeState::ButtonAttachment (proc.apvts, f.id, *b));
+    }
+    deessBtn.setClickingTogglesState (true);
+    deessBtn.setTooltip ("Automatic sibilance detection: keeps harsh S sounds out of the riser");
+    addAndMakeVisible (deessBtn);
+    deessAtt = std::make_unique<AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, "deess", deessBtn);
     dragTile.onMessage = [this] (const String& m) { flashMessage = m; flashTicks = 150; };
 
     for (auto* b : { &captureBtn, &loadBtn, &previewBtn })
@@ -269,8 +296,46 @@ RiseVerbEditor::RiseVerbEditor (RiseVerbProcessor& p)
     addAndMakeVisible (lengthBox);
     addAndMakeVisible (rateBox);
 
+    setSize (860, 466);   // last, so resized() lays out every component
     updateStatus();
     startTimerHz (30);
+}
+
+void RiseVerbEditor::refreshPresetList()
+{
+    presetBox.clear (dontSendNotification);
+    presetBox.addSectionHeading ("Factory");
+    auto names = proc.getFactoryPresetNames();
+    for (int i = 0; i < names.size(); ++i)
+        presetBox.addItem (names[i], i + 1);
+    userPresetFiles = proc.getUserPresets();
+    if (! userPresetFiles.isEmpty())
+    {
+        presetBox.addSeparator();
+        presetBox.addSectionHeading ("User");
+        for (int i = 0; i < userPresetFiles.size(); ++i)
+            presetBox.addItem (userPresetFiles[i].getFileNameWithoutExtension(), 1000 + i);
+    }
+    presetBox.setText (proc.getPresetName(), dontSendNotification);
+}
+
+void RiseVerbEditor::showSaveDialog()
+{
+    saveDialog = std::make_unique<AlertWindow> ("Save preset", "Name your preset:", MessageBoxIconType::NoIcon, this);
+    saveDialog->addTextEditor ("name", proc.getPresetName() == "Init" ? String ("My Riser") : proc.getPresetName());
+    saveDialog->addButton ("Save", 1, KeyPress (KeyPress::returnKey));
+    saveDialog->addButton ("Cancel", 0, KeyPress (KeyPress::escapeKey));
+    saveDialog->enterModalState (true, ModalCallbackFunction::create ([this] (int result)
+    {
+        if (result == 1 && saveDialog != nullptr)
+        {
+            const auto name = saveDialog->getTextEditorContents ("name");
+            if (proc.saveUserPreset (name)) { flashMessage = "Preset saved: " + name; flashTicks = 90; }
+            else { flashMessage = "Could not save preset."; flashTicks = 90; }
+            refreshPresetList();
+        }
+        saveDialog.reset();
+    }), false);
 }
 
 RiseVerbEditor::~RiseVerbEditor()
@@ -288,12 +353,16 @@ void RiseVerbEditor::paint (Graphics& g)
     g.drawText ("RISEVERB", head.removeFromLeft (150), Justification::centredLeft);
     g.setColour (rv::textDim);
     g.setFont (FontOptions (12.0f));
-    g.drawText ("by M1lobeats", head.removeFromLeft (260), Justification::centredLeft);
+    g.drawText ("by M1lobeats", head.removeFromLeft (120), Justification::centredLeft);
     g.drawText (String (proc.getBpm(), 1) + " BPM", head, Justification::centredRight);
+
+    g.setColour (rv::textDim);
+    g.setFont (FontOptions (11.0f, Font::bold));
+    g.drawText ("FX", Rectangle<int> (20, fxRowY, 40, 32), Justification::centredLeft);
 
     // control strip background
     g.setColour (rv::panel);
-    g.fillRoundedRectangle (Rectangle<int> (20, 300, getWidth() - 40, 116).toFloat(), 10.0f);
+    g.fillRoundedRectangle (Rectangle<int> (20, stripY, getWidth() - 40, 116).toFloat(), 10.0f);
 
     if (dropHover)
     {
@@ -307,8 +376,13 @@ void RiseVerbEditor::paint (Graphics& g)
 void RiseVerbEditor::resized()
 {
     auto r = getLocalBounds().reduced (20, 0);
-    r.removeFromTop (54);
-    wave.setBounds (r.removeFromTop (182));
+    auto head = r.removeFromTop (54);
+    head.removeFromLeft (290);
+    head.removeFromRight (90);
+    savePresetBtn.setBounds (head.removeFromRight (64).withSizeKeepingCentre (64, 28));
+    head.removeFromRight (8);
+    presetBox.setBounds (head.removeFromRight (230).withSizeKeepingCentre (230, 28));
+    wave.setBounds (r.removeFromTop (170));
     wave.setRiser (proc.getRiserCopy());
 
     r.removeFromTop (12);
@@ -319,7 +393,18 @@ void RiseVerbEditor::resized()
     previewBtn.setBounds (buttons.removeFromLeft (bw)); buttons.removeFromLeft (10);
     dragTile.setBounds (buttons);
 
-    auto strip = Rectangle<int> (20, 300, getWidth() - 40, 116).reduced (10, 8);
+    r.removeFromTop (12);
+    auto fxRow = r.removeFromTop (32);
+    fxRowY = fxRow.getY();
+    fxRow.removeFromLeft (34);
+    deessBtn.setBounds (fxRow.removeFromRight (104));
+    fxRow.removeFromRight (14);
+    const int fw = (fxRow.getWidth() - 7 * 6) / 8;
+    for (auto* b : fxButtons) { b->setBounds (fxRow.removeFromLeft (fw)); fxRow.removeFromLeft (6); }
+
+    r.removeFromTop (12);
+    stripY = r.getY();
+    auto strip = Rectangle<int> (20, stripY, getWidth() - 40, 116).reduced (10, 8);
     const int cw = strip.getWidth() / 8;
 
     auto placeCombo = [&] (ComboBox& box, Label& label)
@@ -371,7 +456,7 @@ void RiseVerbEditor::updateStatus()
 
     String s;
     if (cap)
-        s = "Recording... play your vocal in Logic, then press STOP  (" + String (proc.getCaptureSeconds(), 1) + " s)";
+        s = "Recording... play your vocal in Logic. It stops by itself when you stop playback  (" + String (proc.getCaptureSeconds(), 1) + " s)";
     else if (flashTicks > 0)
         s = flashMessage;
     else if (! proc.hasRiser() && ! proc.isRendering())
@@ -383,8 +468,17 @@ void RiseVerbEditor::updateStatus()
 
 void RiseVerbEditor::timerCallback()
 {
-    if (proc.paramsChanged.exchange (false) && proc.hasVocal())
-        proc.requestRender();
+    proc.previewTick();
+
+    if (proc.autoStopRequested.exchange (false) && proc.isCapturing())
+        proc.stopCapture();
+
+    if (proc.paramsChanged.exchange (false))
+    {
+        if (proc.hasVocal()) proc.requestRender();
+        if (presetBox.getText() != proc.getPresetName())
+            presetBox.setText (proc.getPresetName(), dontSendNotification);
+    }
 
     if (proc.bpmChanged.exchange (false))
     {

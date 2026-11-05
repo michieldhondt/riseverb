@@ -38,10 +38,36 @@ int main (int argc, char** argv)
     MessageManager::getInstance()->runDispatchLoopUntil (100);
     std::printf ("riser after 2 bars: %.3f s (expect 4.000)\n", p.getRiserSeconds());
 
+    { AudioBuffer<float> b (2, bs); b.clear(); p.processBlock (b, m); }   // host is running
     p.togglePreview();
     float rms = 0; int blocks = 0;
     while (p.isPreviewing() && blocks < 2000) { AudioBuffer<float> b (2, bs); b.clear(); p.processBlock (b, m); rms += b.getRMSLevel (0, 0, bs); ++blocks; }
     std::printf ("preview played %d blocks (%.2f s), avg rms %.3f\n", blocks, blocks * bs / sr, rms / jmax (1, blocks));
+
+    // presets + effects
+    auto names = p.getFactoryPresetNames();
+    std::printf ("factory presets: %s\n", names.joinIntoString (", ").toRawUTF8());
+    p.applyFactoryPreset (names.indexOf ("Big Drop Build"));
+    for (int i = 0; i < 30; ++i) MessageManager::getInstance()->runDispatchLoopUntil (20);
+    for (int i = 0; i < 300 && p.isRendering(); ++i) Thread::sleep (10);
+    MessageManager::getInstance()->runDispatchLoopUntil (100);
+    std::printf ("preset '%s' -> riser %.3f s, rise=%d sweep=%d\n", p.getPresetName().toRawUTF8(), p.getRiserSeconds(),
+                 (int) *p.apvts.getRawParameterValue ("fx_rise"), (int) *p.apvts.getRawParameterValue ("fx_sweep"));
+    std::printf ("save user preset: %d\n", (int) p.saveUserPreset ("Test Riser"));
+    p.applyFactoryPreset (0);
+    std::printf ("after Init: rise=%d\n", (int) *p.apvts.getRawParameterValue ("fx_rise"));
+    const bool loaded = p.loadUserPreset (p.getUserPresets()[0]);
+    std::printf ("load user preset: %d -> rise=%d name=%s\n", (int) loaded,
+                 (int) *p.apvts.getRawParameterValue ("fx_rise"), p.getPresetName().toRawUTF8());
+    // Preview while host is idle -> stand-alone fallback must not crash
+    Thread::sleep (200);
+    p.togglePreview();
+    for (int i = 0; i < 10; ++i) { p.previewTick(); MessageManager::getInstance()->runDispatchLoopUntil (20); }
+    std::printf ("idle-host preview: previewing=%d progress=%.2f\n", (int) p.isPreviewing(), p.getPreviewProgress());
+    p.stopPreview();
+    for (int i = 0; i < 30; ++i) MessageManager::getInstance()->runDispatchLoopUntil (20);
+    for (int i = 0; i < 300 && p.isRendering(); ++i) Thread::sleep (10);
+    MessageManager::getInstance()->runDispatchLoopUntil (100);
 
     auto f = p.exportRiser();
     std::printf ("exported: %s (%lld bytes)\n", f.getFullPathName().toRawUTF8(), (long long) f.getSize());

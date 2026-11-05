@@ -4,6 +4,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "RiserEngine.h"
 
+struct FxInfo { const char* id; const char* label; };
+
 class RiseVerbProcessor : public juce::AudioProcessor,
                           private juce::AudioProcessorValueTreeState::Listener
 {
@@ -45,31 +47,47 @@ public:
     bool hasRiser() const;
 
     void togglePreview();
-    bool isPreviewing() const { return previewing.load(); }
-    float getPreviewProgress() const;   // 0..1 over riser + vocal intro, -1 when stopped
+    void stopPreview();
+    bool isPreviewing() const { return previewing.load() || fallbackActive; }
+    float getPreviewProgress() const;   // 0..1 over the riser, >1 while the vocal intro plays, -1 when stopped
+    void previewTick();                 // called by the editor timer: handles the stand-alone preview fallback
 
     void requestRender();
     bool isRendering() const { return rendering.load(); }
     int getRenderVersion() const { return renderVersion.load(); }
 
-    // Copy of the rendered riser for drawing.
     juce::AudioBuffer<float> getRiserCopy() const;
     double getRiserSeconds() const;
     double getBpm() const { return hostBpm.load(); }
 
-    // Writes the current riser to ~/Music/RiseVerb and returns the file.
     juce::File exportRiser();
+
+    // ---- presets ----
+    juce::StringArray getFactoryPresetNames() const;
+    void applyFactoryPreset (int index);
+    static juce::File getUserPresetFolder();
+    juce::Array<juce::File> getUserPresets() const;
+    bool saveUserPreset (const juce::String& name);
+    bool loadUserPreset (const juce::File& f);
+    juce::String getPresetName() const { return apvts.state.getProperty ("presetName", "Init").toString(); }
 
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
     static const juce::StringArray lengthChoices, rateChoices, modeChoices;
+    static const std::vector<FxInfo> fxList;
+
+    std::atomic<bool> bpmChanged { false }, paramsChanged { false }, autoStopRequested { false };
 
 private:
     void parameterChanged (const juce::String&, float) override;
     riser::Settings currentSettings() const;
     void renderJob();
     void rebuildPreviewBuffer();
+    void setParam (const juce::String& id, float realValue);
+    bool hostIsProcessing() const;
+    void startFallbackPreview();
+    void stopFallbackPreview();
 
     double sr = 48000.0;
 
@@ -77,25 +95,34 @@ private:
     juce::AudioBuffer<float> captureBuffer;
     std::atomic<int> captureWritePos { 0 };
     std::atomic<bool> capturing { false };
+    bool wasPlaying = false;
 
-    // source vocal + rendered riser (message/worker threads)
+    // source vocal + rendered riser
     mutable juce::CriticalSection dataLock;
     riser::Stereo vocal;
     juce::AudioBuffer<float> riserBuffer;
     double riserSampleRate = 48000.0;
     double riserBpm = 120.0;
 
-    // preview (riser followed by the start of the vocal)
+    // preview through the host (riser followed by the start of the vocal)
     juce::SpinLock previewLock;
     juce::AudioBuffer<float> previewBuffer;
-    int previewRiserLength = 0;
+    std::atomic<int> previewRiserLength { 0 };
     std::atomic<int> previewPos { 0 };
     std::atomic<bool> previewing { false };
+    juce::uint32 previewStartMs = 0;
+    std::atomic<juce::uint32> lastProcessMs { 0 };
+
+    // stand-alone preview when the host is not calling processBlock (e.g. Logic with the transport stopped)
+    std::unique_ptr<juce::AudioDeviceManager> deviceManager;
+    juce::AudioSourcePlayer sourcePlayer;
+    juce::AudioBuffer<float> fallbackBuffer;
+    std::unique_ptr<juce::MemoryAudioSource> memorySource;
+    std::unique_ptr<juce::ResamplingAudioSource> resampler;
+    bool fallbackActive = false;
+    double fallbackDeviceRate = 48000.0;
 
     std::atomic<double> hostBpm { 120.0 };
-public:
-    std::atomic<bool> bpmChanged { false }, paramsChanged { false };
-private:
     std::atomic<bool> rendering { false }, renderAgain { false };
     std::atomic<int> renderVersion { 0 };
     juce::ThreadPool pool { 1 };

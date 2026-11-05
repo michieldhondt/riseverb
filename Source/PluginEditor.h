@@ -22,7 +22,7 @@ public:
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int, int, int, int, juce::ComboBox&) override;
     juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::FontOptions (13.0f); }
-    juce::Font getTextButtonFont (juce::TextButton&, int) override { return juce::FontOptions (13.0f, juce::Font::bold); }
+    juce::Font getTextButtonFont (juce::TextButton& b, int h) override { return juce::FontOptions (h < 36 ? 11.0f : 13.0f, juce::Font::bold); }
 };
 
 class WaveformView : public juce::Component
@@ -95,9 +95,21 @@ private:
     juce::Label lengthLabel, rateLabel, modeLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lengthAtt, rateAtt, modeAtt;
 
+    juce::ComboBox presetBox;
+    juce::TextButton savePresetBtn { "SAVE" };
+    juce::TextButton deessBtn { "DE-ESS AUTO" };
+    juce::OwnedArray<juce::TextButton> fxButtons;
+    juce::OwnedArray<juce::AudioProcessorValueTreeState::ButtonAttachment> fxAttachments;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> deessAtt;
+    juce::Array<juce::File> userPresetFiles;
+    std::unique_ptr<juce::AlertWindow> saveDialog;
+    void refreshPresetList();
+    void showSaveDialog();
+
     std::unique_ptr<juce::FileChooser> chooser;
     int shownVersion = -1;
     bool dropHover = false;
+    int fxRowY = 0, stripY = 0;
     juce::String flashMessage;
     int flashTicks = 0;
 

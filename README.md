@@ -5,22 +5,34 @@ Maakt van een vocal een **reverse-reverb riser**: een swell die opbouwt en preci
 ## Gebruik in Logic Pro
 
 1. Zet **RiseVerb** als Audio FX op je vocaltrack (Audio Units → M1lobeats → RiseVerb).
-2. Klik **CAPTURE** en speel het stuk vocal af (bv. de eerste woorden van je hook). Klik **STOP**.
-   - Of sleep een audiobestand op de plugin, of gebruik **LOAD FILE**.
-3. Kies de **LENGTH** (1/2, 1, 2 of 4 bars). Het tempo neemt RiseVerb automatisch over van Logic.
-4. Stel het geluid bij. Elke wijziging rendert de riser meteen opnieuw:
-   - **SIZE**: hoe lang en vol de reverb-staart is
-   - **TONE**: donker ↔ helder
-   - **WIDTH**: mono ↔ breed stereo
-   - **STUTTER**: *Smooth* (golvende tremolo), *Gate* (harde chops) of *Repeat* (herhaalt telkens hetzelfde stukje: stu-stu-stutter)
-   - **RATE**: 1/4 tot 1/32 op het tempo van je track, of *Build ↑* (versnelt van 1/4 naar 1/32 richting de vocal)
-   - **DEPTH**: hoeveel stutter (0 % = uit)
-   - **OUTPUT**: volume van de riser
-5. **PREVIEW** speelt de riser met daarna het begin van je vocal, zodat je de overgang hoort.
-6. Sleep **DRAG TO DAW** naar een lege track in Logic. Zet het einde van de riser op het moment dat je vocal start.
-   Klik je zonder te slepen, dan wordt het bestand bewaard in `Muziek/RiseVerb` en geopend in Finder.
+2. Klik **CAPTURE** en speel het stuk vocal af. Stop je de playback in Logic, dan stopt de capture vanzelf (of klik **STOP**).
+   - Je kan ook een audiobestand op de plugin slepen of **LOAD FILE** gebruiken.
+3. Kies een **preset** bovenaan of stel zelf in. Elke wijziging rendert meteen opnieuw.
+4. **PREVIEW** speelt de riser met daarna het begin van je vocal. Staat Logic stil, dan speelt RiseVerb de preview zelf af via je standaard audio-uitgang.
+5. Sleep **DRAG TO DAW** naar een lege track en zet het einde van de riser op de start van je vocal. Klik je zonder te slepen, dan komt het bestand in `Muziek/RiseVerb`.
 
-De riser is altijd exact het gekozen aantal maten lang, zodat hij op het grid snapt.
+### Knoppen
+- **LENGTH**: 1/2, 1, 2 of 4 maten, op het tempo van Logic
+- **SIZE / TONE / WIDTH**: lengte van de staart, donker ↔ helder, mono ↔ breed
+- **STUTTER**: *Smooth*, *Gate* (harde chops) of *Repeat* (stu-stu-stutter). **RATE**: 1/4 tot 1/32 of *Build ↑*. **DEPTH**: hoeveel (0 % = uit)
+- **OUTPUT**: volume
+
+### One-click FX
+| Knop | Wat het doet |
+|---|---|
+| SHIMMER | octaaf hoger erbij, luchtig en glanzend |
+| DARK OCT | octaaf lager erbij, donker en zwaar |
+| PITCH RISE | toonhoogte klimt een octaaf omhoog richting de vocal |
+| FILTER SWEEP | resonant low-pass filter dat opengaat richting de vocal |
+| LO-FI | bitcrush + downsample |
+| RADIO | telefoon/radio-klank met drive |
+| DELAY | tempo-gesyncte ping-pong delay (1/8 dotted) |
+| TAPE | wow & flutter + warme saturatie |
+| DE-ESS AUTO | detecteert scherpe S-klanken automatisch en houdt ze uit de reverb (standaard aan) |
+
+### Presets
+13 factory presets (Classic Swell, Ghost Riser, Shimmer Lift, Stutter Build, Repeat Hype, Trap Chop, Pitch Climb, Lo-Fi Tape, Radio Rise, Dark Octave, Echo Rise, Big Drop Build…).
+Met **SAVE** bewaar je je eigen instellingen als user preset in `Muziek/RiseVerb/Presets`.
 
 ## Installeren (Mac)
 

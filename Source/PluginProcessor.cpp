@@ -5,6 +5,17 @@ const juce::StringArray RiseVerbProcessor::lengthChoices { "1/2 bar", "1 bar", "
 const juce::StringArray RiseVerbProcessor::rateChoices   { "1/4", "1/8", "1/16", "1/32", juce::String::fromUTF8 ("Build \xe2\x86\x91") };
 const juce::StringArray RiseVerbProcessor::modeChoices   { "Smooth", "Gate", "Repeat" };
 
+const std::vector<FxInfo> RiseVerbProcessor::fxList {
+    { "fx_shimmer", "SHIMMER" }, { "fx_dark", "DARK OCT" }, { "fx_rise", "PITCH RISE" }, { "fx_sweep", "FILTER SWEEP" },
+    { "fx_lofi", "LO-FI" }, { "fx_radio", "RADIO" }, { "fx_delay", "DELAY" }, { "fx_tape", "TAPE" } };
+
+static juce::StringArray allParamIds()
+{
+    juce::StringArray ids { "length", "size", "tone", "width", "mode", "rate", "depth", "output", "deess" };
+    for (auto& f : RiseVerbProcessor::fxList) ids.add (f.id);
+    return ids;
+}
+
 static constexpr double kMaxCaptureSeconds = 60.0;
 static constexpr double kPreviewVocalSeconds = 2.5;
 
@@ -14,14 +25,15 @@ RiseVerbProcessor::RiseVerbProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
-    for (auto id : { "length", "size", "tone", "width", "mode", "rate", "depth", "output" })
+    for (auto& id : allParamIds())
         apvts.addParameterListener (id, this);
 }
 
 RiseVerbProcessor::~RiseVerbProcessor()
 {
-    for (auto id : { "length", "size", "tone", "width", "mode", "rate", "depth", "output" })
+    for (auto& id : allParamIds())
         apvts.removeParameterListener (id, this);
+    stopFallbackPreview();
     pool.removeAllJobs (true, 10000);
 }
 
@@ -42,6 +54,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout RiseVerbProcessor::createLay
                      NormalisableRange<float> (-24.f, 6.f, 0.1f), 0.0f,
                      AudioParameterFloatAttributes().withLabel ("dB")
                         .withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; })));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { "deess", 1 }, "De-Ess (auto)", true));
+    for (auto& f : fxList)
+        p.push_back (std::make_unique<AudioParameterBool> (ParameterID { f.id, 1 }, String (f.label).toLowerCase(), false));
     return { p.begin(), p.end() };
 }
 
@@ -73,15 +88,24 @@ void RiseVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     for (int c = getTotalNumInputChannels(); c < getTotalNumOutputChannels(); ++c)
         buffer.clear (c, 0, n);
 
-    // Host tempo
+    lastProcessMs.store (juce::Time::getMillisecondCounter());
+
+    // Host tempo + transport
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
+        {
             if (auto bpm = pos->getBpm())
                 if (*bpm > 20.0 && std::abs (*bpm - hostBpm.load()) > 0.01)
                 {
                     hostBpm.store (*bpm);
                     bpmChanged.store (true);
                 }
+            const bool playing = pos->getIsPlaying();
+            // 1-click flow: when Logic stops playing, the capture stops by itself
+            if (capturing.load() && wasPlaying && ! playing && captureWritePos.load() > 0)
+                autoStopRequested.store (true);
+            wasPlaying = playing;
+        }
 
     // Capture: audio passes through untouched, we just record it.
     if (capturing.load())
@@ -118,7 +142,8 @@ void RiseVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
 
 void RiseVerbProcessor::startCapture()
 {
-    previewing.store (false);
+    stopPreview();
+    autoStopRequested.store (false);
     captureWritePos.store (0);
     capturing.store (true);
 }
@@ -211,6 +236,16 @@ riser::Settings RiseVerbProcessor::currentSettings() const
     s.stutterMode  = juce::jlimit (0, 2, (int) apvts.getRawParameterValue ("mode")->load());
     s.tremoloDepth = apvts.getRawParameterValue ("depth")->load();
     s.outputDb     = apvts.getRawParameterValue ("output")->load();
+    auto on = [this] (const char* id) { return apvts.getRawParameterValue (id)->load() > 0.5f; };
+    s.deEss       = on ("deess");
+    s.shimmer     = on ("fx_shimmer");
+    s.darkOctave  = on ("fx_dark");
+    s.pitchRise   = on ("fx_rise");
+    s.filterSweep = on ("fx_sweep");
+    s.lofi        = on ("fx_lofi");
+    s.radio       = on ("fx_radio");
+    s.delay       = on ("fx_delay");
+    s.tape        = on ("fx_tape");
     return s;
 }
 
@@ -282,25 +317,96 @@ void RiseVerbProcessor::rebuildPreviewBuffer()
     }
     const juce::SpinLock::ScopedLockType lock (previewLock);
     previewBuffer = std::move (pb);
-    previewRiserLength = riserLen;
+    previewRiserLength.store (riserLen);
     if (previewPos.load() >= previewBuffer.getNumSamples())
         previewing.store (false);
 }
 
 // ---------------------------------------------------------------- preview / export
 
+bool RiseVerbProcessor::hostIsProcessing() const
+{
+    return juce::Time::getMillisecondCounter() - lastProcessMs.load() < 120;
+}
+
 void RiseVerbProcessor::togglePreview()
 {
-    if (previewing.load()) { previewing.store (false); return; }
+    if (isPreviewing()) { stopPreview(); return; }
     if (! hasRiser()) return;
     previewPos.store (0);
-    previewing.store (true);
+    previewStartMs = juce::Time::getMillisecondCounter();
+    if (hostIsProcessing())
+        previewing.store (true);
+    else
+        startFallbackPreview();   // host is idle (transport stopped): play it ourselves
+}
+
+void RiseVerbProcessor::stopPreview()
+{
+    previewing.store (false);
+    stopFallbackPreview();
+}
+
+void RiseVerbProcessor::previewTick()
+{
+    // Host preview started but the host stopped calling us -> switch to stand-alone playback
+    if (previewing.load() && ! fallbackActive
+        && juce::Time::getMillisecondCounter() - previewStartMs > 150 && previewPos.load() == 0)
+    {
+        previewing.store (false);
+        startFallbackPreview();
+    }
+
+    if (fallbackActive && memorySource != nullptr
+        && memorySource->getNextReadPosition() >= memorySource->getTotalLength())
+        stopFallbackPreview();
+}
+
+void RiseVerbProcessor::startFallbackPreview()
+{
+    stopFallbackPreview();
+    {
+        const juce::SpinLock::ScopedLockType lock (previewLock);
+        fallbackBuffer = previewBuffer;
+    }
+    if (fallbackBuffer.getNumSamples() == 0) return;
+
+    if (deviceManager == nullptr)
+    {
+        deviceManager = std::make_unique<juce::AudioDeviceManager>();
+        const auto err = deviceManager->initialiseWithDefaultDevices (0, 2);
+        if (err.isNotEmpty()) { deviceManager.reset(); return; }
+    }
+    auto* dev = deviceManager->getCurrentAudioDevice();
+    if (dev == nullptr) return;
+    fallbackDeviceRate = dev->getCurrentSampleRate();
+
+    memorySource = std::make_unique<juce::MemoryAudioSource> (fallbackBuffer, false, false);
+    resampler = std::make_unique<juce::ResamplingAudioSource> (memorySource.get(), false, 2);
+    resampler->setResamplingRatio (sr / fallbackDeviceRate);
+    sourcePlayer.setSource (resampler.get());
+    deviceManager->addAudioCallback (&sourcePlayer);
+    fallbackActive = true;
+}
+
+void RiseVerbProcessor::stopFallbackPreview()
+{
+    if (deviceManager != nullptr)
+        deviceManager->removeAudioCallback (&sourcePlayer);
+    sourcePlayer.setSource (nullptr);
+    resampler.reset();
+    memorySource.reset();
+    fallbackActive = false;
 }
 
 float RiseVerbProcessor::getPreviewProgress() const
 {
-    if (! previewing.load() || previewRiserLength <= 0) return -1.0f;
-    return (float) previewPos.load() / (float) previewRiserLength;   // >1 means: now playing the vocal
+    const int riserLen = previewRiserLength.load();
+    if (riserLen <= 0) return -1.0f;
+    if (fallbackActive && memorySource != nullptr)
+        return (float) memorySource->getNextReadPosition() / (float) riserLen;
+    if (! previewing.load()) return -1.0f;
+    return (float) previewPos.load() / (float) riserLen;
 }
 
 juce::AudioBuffer<float> RiseVerbProcessor::getRiserCopy() const
@@ -344,6 +450,104 @@ juce::File RiseVerbProcessor::exportRiser()
     writer->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
     writer.reset();
     return file;
+}
+
+// ---------------------------------------------------------------- presets
+
+namespace
+{
+struct FactoryPreset { const char* name; std::vector<std::pair<const char*, float>> values; };
+
+// Values are real parameter values (choice = index, bool = 0/1). Anything not listed goes back to default.
+const std::vector<FactoryPreset>& factoryPresets()
+{
+    static const std::vector<FactoryPreset> list {
+        { "Init", {} },
+        { "Classic Swell",  { { "size", 0.65f }, { "tone", 0.55f } } },
+        { "Ghost Riser",    { { "length", 2 }, { "size", 0.9f }, { "tone", 0.3f }, { "width", 1.0f }, { "fx_sweep", 1 } } },
+        { "Shimmer Lift",   { { "size", 0.7f }, { "tone", 0.75f }, { "fx_shimmer", 1 } } },
+        { "Stutter Build",  { { "mode", 1 }, { "rate", 4 }, { "depth", 0.9f } } },
+        { "Repeat Hype",    { { "mode", 2 }, { "rate", 2 }, { "depth", 0.85f } } },
+        { "Trap Chop",      { { "mode", 1 }, { "rate", 3 }, { "depth", 1.0f }, { "tone", 0.7f } } },
+        { "Pitch Climb",    { { "size", 0.7f }, { "fx_rise", 1 } } },
+        { "Lo-Fi Tape",     { { "tone", 0.45f }, { "fx_lofi", 1 }, { "fx_tape", 1 } } },
+        { "Radio Rise",     { { "width", 0.4f }, { "fx_radio", 1 }, { "fx_sweep", 1 } } },
+        { "Dark Octave",    { { "size", 0.8f }, { "tone", 0.35f }, { "fx_dark", 1 } } },
+        { "Echo Rise",      { { "width", 1.0f }, { "mode", 0 }, { "rate", 1 }, { "depth", 0.4f }, { "fx_delay", 1 } } },
+        { "Big Drop Build", { { "length", 2 }, { "width", 1.0f }, { "mode", 1 }, { "rate", 4 }, { "depth", 0.8f },
+                              { "fx_rise", 1 }, { "fx_sweep", 1 } } },
+    };
+    return list;
+}
+}
+
+juce::StringArray RiseVerbProcessor::getFactoryPresetNames() const
+{
+    juce::StringArray names;
+    for (auto& p : factoryPresets()) names.add (p.name);
+    return names;
+}
+
+void RiseVerbProcessor::setParam (const juce::String& id, float realValue)
+{
+    if (auto* p = apvts.getParameter (id))
+        p->setValueNotifyingHost (p->convertTo0to1 (realValue));
+}
+
+void RiseVerbProcessor::applyFactoryPreset (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) factoryPresets().size())) return;
+    const auto& preset = factoryPresets()[(size_t) index];
+    for (auto& id : allParamIds())
+        if (auto* p = apvts.getParameter (id))
+            p->setValueNotifyingHost (p->getDefaultValue());
+    for (auto& [id, v] : preset.values)
+        setParam (id, v);
+    apvts.state.setProperty ("presetName", preset.name, nullptr);
+    paramsChanged.store (true);
+}
+
+juce::File RiseVerbProcessor::getUserPresetFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("RiseVerb").getChildFile ("Presets");
+}
+
+juce::Array<juce::File> RiseVerbProcessor::getUserPresets() const
+{
+    auto files = getUserPresetFolder().findChildFiles (juce::File::findFiles, false, "*.rvpreset");
+    files.sort();
+    return files;
+}
+
+bool RiseVerbProcessor::saveUserPreset (const juce::String& rawName)
+{
+    const auto name = juce::File::createLegalFileName (rawName.trim());
+    if (name.isEmpty()) return false;
+    auto dir = getUserPresetFolder();
+    if (! dir.createDirectory()) return false;
+    apvts.state.setProperty ("presetName", name, nullptr);
+    if (auto xml = apvts.copyState().createXml())
+        return xml->writeTo (dir.getChildFile (name + ".rvpreset"));
+    return false;
+}
+
+bool RiseVerbProcessor::loadUserPreset (const juce::File& f)
+{
+    auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType())) return false;
+    auto tree = juce::ValueTree::fromXml (*xml);
+    for (auto& id : allParamIds())
+        if (auto* p = apvts.getParameter (id))
+        {
+            auto child = tree.getChildWithProperty ("id", id);
+            if (child.isValid())
+                p->setValueNotifyingHost (p->convertTo0to1 ((float) child.getProperty ("value")));
+            else
+                p->setValueNotifyingHost (p->getDefaultValue());
+        }
+    apvts.state.setProperty ("presetName", f.getFileNameWithoutExtension(), nullptr);
+    paramsChanged.store (true);
+    return true;
 }
 
 // ---------------------------------------------------------------- state
