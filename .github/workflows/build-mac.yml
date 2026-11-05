@@ -1,0 +1,61 @@
+name: Build macOS (AU + VST3)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get JUCE
+        run: git clone --depth 1 --branch 8.0.4 https://github.com/juce-framework/JUCE.git JUCE
+
+      - name: Configure (universal: Apple Silicon + Intel)
+        run: cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+
+      - name: Build
+        run: cmake --build build --config Release --target RiseVerb_AU RiseVerb_VST3 -- -quiet
+
+      - name: Sign (ad-hoc) and validate with auval
+        run: |
+          ART=build/RiseVerb_artefacts/Release
+          codesign --force --deep -s - "$ART/AU/RiseVerb.component"
+          codesign --force --deep -s - "$ART/VST3/RiseVerb.vst3"
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "$ART/AU/RiseVerb.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          sleep 3
+          auval -v aufx Rsvb Mchl
+
+      - name: Package
+        run: |
+          ART=build/RiseVerb_artefacts/Release
+          mkdir -p dist/RiseVerb
+          cp -R "$ART/AU/RiseVerb.component" dist/RiseVerb/
+          cp -R "$ART/VST3/RiseVerb.vst3" dist/RiseVerb/
+          cp installer/Install-RiseVerb.command dist/RiseVerb/
+          chmod +x dist/RiseVerb/Install-RiseVerb.command
+          cp README.md dist/RiseVerb/
+          cd dist && ditto -c -k --keepParent RiseVerb RiseVerb-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiseVerb-mac
+          path: dist/RiseVerb-mac.zip
+
+      - name: Publish release (latest)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: RiseVerb (latest build)
+          prerelease: false
+          files: dist/RiseVerb-mac.zip
