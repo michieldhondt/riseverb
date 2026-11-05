@@ -51,6 +51,7 @@ public:
     bool isPreviewing() const { return previewing.load() || fallbackActive; }
     float getPreviewProgress() const;   // 0..1 over the riser, >1 while the vocal intro plays, -1 when stopped
     void previewTick();                 // called by the editor timer: handles the stand-alone preview fallback
+    juce::String getPreviewStatus() const { return previewStatus; }
 
     void requestRender();
     bool isRendering() const { return rendering.load(); }
@@ -96,6 +97,8 @@ private:
     std::atomic<int> captureWritePos { 0 };
     std::atomic<bool> capturing { false };
     bool wasPlaying = false;
+    std::atomic<bool> hostPlaying { false };
+    juce::String previewStatus;
 
     // source vocal + rendered riser
     mutable juce::CriticalSection dataLock;

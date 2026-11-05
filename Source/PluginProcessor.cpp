@@ -105,6 +105,7 @@ void RiseVerbProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             if (capturing.load() && wasPlaying && ! playing && captureWritePos.load() > 0)
                 autoStopRequested.store (true);
             wasPlaying = playing;
+            hostPlaying.store (playing);
         }
 
     // Capture: audio passes through untouched, we just record it.
@@ -335,10 +336,15 @@ void RiseVerbProcessor::togglePreview()
     if (! hasRiser()) return;
     previewPos.store (0);
     previewStartMs = juce::Time::getMillisecondCounter();
-    if (hostIsProcessing())
+    // Only trust the host path while Logic is actually playing: with the transport stopped,
+    // Logic may call the plug-in but not send its output anywhere.
+    if (hostIsProcessing() && hostPlaying.load())
+    {
         previewing.store (true);
+        previewStatus = "Preview via Logic";
+    }
     else
-        startFallbackPreview();   // host is idle (transport stopped): play it ourselves
+        startFallbackPreview();   // play it ourselves on the Mac's audio output
 }
 
 void RiseVerbProcessor::stopPreview()
@@ -375,10 +381,22 @@ void RiseVerbProcessor::startFallbackPreview()
     {
         deviceManager = std::make_unique<juce::AudioDeviceManager>();
         const auto err = deviceManager->initialiseWithDefaultDevices (0, 2);
-        if (err.isNotEmpty()) { deviceManager.reset(); return; }
+        if (err.isNotEmpty())
+        {
+            previewStatus = "Preview failed: " + err;
+            deviceManager.reset();
+            return;
+        }
     }
     auto* dev = deviceManager->getCurrentAudioDevice();
-    if (dev == nullptr) return;
+    if (dev == nullptr)
+    {
+        previewStatus = "Preview failed: no audio output found";
+        deviceManager.reset();
+        return;
+    }
+    if (! dev->isOpen() || ! dev->isPlaying())
+        deviceManager->restartLastAudioDevice();
     fallbackDeviceRate = dev->getCurrentSampleRate();
 
     memorySource = std::make_unique<juce::MemoryAudioSource> (fallbackBuffer, false, false);
@@ -387,6 +405,7 @@ void RiseVerbProcessor::startFallbackPreview()
     sourcePlayer.setSource (resampler.get());
     deviceManager->addAudioCallback (&sourcePlayer);
     fallbackActive = true;
+    previewStatus = "Preview via " + dev->getName() + (dev->isPlaying() ? "" : "  (device not running!)");
 }
 
 void RiseVerbProcessor::stopFallbackPreview()

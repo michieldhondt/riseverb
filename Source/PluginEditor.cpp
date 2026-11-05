@@ -225,7 +225,12 @@ RiseVerbEditor::RiseVerbEditor (RiseVerbProcessor& p)
                                   { flashMessage = "Could not read that file."; flashTicks = 90; }
                               });
     };
-    previewBtn.onClick = [this] { proc.togglePreview(); };
+    previewBtn.onClick = [this]
+    {
+        proc.togglePreview();
+        if (! proc.isPreviewing() && proc.getPreviewStatus().startsWith ("Preview failed"))
+        { flashMessage = proc.getPreviewStatus(); flashTicks = 240; }
+    };
 
     // presets
     presetBox.setTextWhenNothingSelected ("Presets");
@@ -459,6 +464,8 @@ void RiseVerbEditor::updateStatus()
         s = "Recording... play your vocal in Logic. It stops by itself when you stop playback  (" + String (proc.getCaptureSeconds(), 1) + " s)";
     else if (flashTicks > 0)
         s = flashMessage;
+    else if (proc.isPreviewing())
+        s = proc.getPreviewStatus();
     else if (! proc.hasRiser() && ! proc.isRendering())
         s = "Press CAPTURE and play your vocal  -  or drop / load an audio file here";
     else if (proc.hasRiser())
