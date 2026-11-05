@@ -22,7 +22,8 @@ struct Settings
     float  size         = 0.6f;  // 0..1  decay length / density of the tail
     float  tone         = 0.6f;  // 0..1  dark .. bright
     float  width        = 0.8f;  // 0..1  mono .. wide
-    double tremoloDiv   = 16.0;  // 4 = 1/4 notes, 8 = 1/8, 16 = 1/16, 32 = 1/32
+    int    stutterMode  = 1;     // 0 = smooth (tremolo), 1 = gate (hard chops), 2 = repeat (slice repeat)
+    double tremoloDiv   = 16.0;  // 4 = 1/4 notes, 8 = 1/8, 16 = 1/16, 32 = 1/32, 0 = build (1/4 -> 1/32)
     float  tremoloDepth = 0.0f;  // 0..1
     float  outputDb     = 0.0f;  // -24..+6, applied after normalising to -1 dBFS
 };
@@ -142,6 +143,100 @@ inline void highpass (std::vector<float>& x, double hz, double sr)
         x2 = x1; x1 = v; y2 = y1; y1 = y; v = (float) y;
     }
 }
+
+// Grid steps counted back from the end of the riser. In build mode the rate speeds up
+// towards the vocal: 1/4 -> 1/8 -> 1/16 -> 1/32 over four equal parts of the riser.
+struct Step { size_t start, len; size_t beat; };
+
+inline std::vector<Step> makeGrid (const Settings& s, size_t L)
+{
+    const double beatLen = 60.0 / s.bpm * s.sampleRate;
+    std::vector<Step> steps;
+    double t = (double) L;
+    while (t > 0.5)
+    {
+        double div = s.tremoloDiv;
+        if (div <= 0.0)
+        {
+            const double posFromStart = t / (double) L;   // 0 at start .. 1 at the vocal (t = end of this step)
+            div = posFromStart < 0.25 ? 4.0 : posFromStart < 0.5 ? 8.0 : posFromStart < 0.75 ? 16.0 : 32.0;
+        }
+        const double period = (4.0 / div) * beatLen;
+        const double start = std::max (0.0, t - period);
+        const size_t beat = (size_t) std::floor (((double) L - t + 0.5) / beatLen);   // beat index from the end
+        steps.push_back ({ (size_t) std::llround (start), (size_t) std::llround (t - start), beat });
+        t = start;
+    }
+    std::reverse (steps.begin(), steps.end());
+    return steps;
+}
+
+inline void applyStutter (Stereo& out, const Settings& s)
+{
+    const size_t L = out.size();
+    const float d = s.tremoloDepth;
+    const auto steps = makeGrid (s, L);
+    const size_t ramp = (size_t) (0.002 * s.sampleRate);   // 2 ms anti-click
+
+    if (s.stutterMode == 0)   // smooth tremolo
+    {
+        for (const auto& st : steps)
+            for (size_t k = 0; k < st.len && st.start + k < L; ++k)
+            {
+                double g = 0.5 + 0.5 * std::cos (2 * M_PI * (double) k / (double) st.len);
+                g = std::pow (g, 0.6);
+                const float gain = (float) (1.0 - d * (1.0 - g));
+                out.L[st.start + k] *= gain; out.R[st.start + k] *= gain;
+            }
+        return;
+    }
+
+    if (s.stutterMode == 1)   // gate: on for the first 55 % of every step, then chopped
+    {
+        for (const auto& st : steps)
+        {
+            const size_t on = std::max<size_t> (ramp * 2, (size_t) (st.len * 0.55));
+            for (size_t k = 0; k < st.len && st.start + k < L; ++k)
+            {
+                double g;
+                if (k < ramp) g = (double) k / ramp;
+                else if (k < on) g = 1.0;
+                else if (k < on + ramp) g = 1.0 - (double) (k - on) / ramp;
+                else g = 0.0;
+                const float gain = (float) (1.0 - d * (1.0 - g));
+                out.L[st.start + k] *= gain; out.R[st.start + k] *= gain;
+            }
+        }
+        return;
+    }
+
+    // repeat: every step replays the first step of its beat (stu-stu-stu-stutter)
+    const Stereo src = out;
+    size_t i = 0;
+    while (i < steps.size())
+    {
+        const Step& first = steps[i];
+        size_t j = i;
+        while (j < steps.size() && steps[j].beat == first.beat)
+        {
+            const Step& st = steps[j];
+            const size_t n = (size_t) (0.8 * (double) std::min (st.len, first.len));   // small gap articulates each repeat
+            for (size_t k = 0; k < st.len && st.start + k < L; ++k)
+            {
+                // short fades at each slice so the repeats click rhythmically, not digitally
+                double env = 1.0;
+                if (k < ramp) env = (double) k / ramp;
+                else if (k + ramp > n) env = k < n ? (double) (n - k) / ramp : 0.0;
+                const size_t from = first.start + std::min (k, n - 1);
+                const float rl = (float) (src.L[from] * env), rr = (float) (src.R[from] * env);
+                out.L[st.start + k] = (1.0f - d) * src.L[st.start + k] + d * rl;
+                out.R[st.start + k] = (1.0f - d) * src.R[st.start + k] + d * rr;
+            }
+            ++j;
+        }
+        i = j;
+    }
+}
 } // namespace detail
 
 // Index of the first sample louder than -40 dB relative to the peak (start of the vocal).
@@ -211,21 +306,9 @@ inline Stereo render (const Stereo& vocal, const Settings& s)
         out.R[i] = m - sd;
     }
 
-    // 6. Tremolo, locked to the grid counted back from the end (= the downbeat where the vocal enters).
+    // 6. Stutter / tremolo, locked to the grid counted back from the end (= the downbeat where the vocal enters).
     if (s.tremoloDepth > 0.001f)
-    {
-        const double period = (4.0 / s.tremoloDiv) * 60.0 / s.bpm * s.sampleRate;
-        for (size_t i = 0; i < L; ++i)
-        {
-            const double fromEnd = (double) (L - i);
-            const double ph = std::fmod (fromEnd, period) / period;          // 0..1
-            double g = 0.5 + 0.5 * std::cos (2 * M_PI * ph);                 // 1 on the grid
-            g = std::pow (g, 0.6);                                           // slightly choppier
-            const float gain = (float) (1.0 - s.tremoloDepth * (1.0 - g));
-            out.L[i] *= gain;
-            out.R[i] *= gain;
-        }
-    }
+        detail::applyStutter (out, s);
 
     // 7. Fade in the very start, very short fade at the end (no click on the downbeat).
     const size_t fi = L / 6, fo = std::min<size_t> (L / 50, (size_t) (0.004 * s.sampleRate));

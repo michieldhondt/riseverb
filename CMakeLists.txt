@@ -16,8 +16,8 @@ endif()
 add_subdirectory(JUCE)
 
 juce_add_plugin(RiseVerb
-    COMPANY_NAME "Michiel"
-    BUNDLE_ID "com.michiel.riseverb"
+    COMPANY_NAME "M1lobeats"
+    BUNDLE_ID "com.m1lobeats.riseverb"
     PLUGIN_MANUFACTURER_CODE Mchl
     PLUGIN_CODE Rsvb
     FORMATS ${RV_FORMATS}

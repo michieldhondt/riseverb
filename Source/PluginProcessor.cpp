@@ -2,7 +2,8 @@
 #include "PluginEditor.h"
 
 const juce::StringArray RiseVerbProcessor::lengthChoices { "1/2 bar", "1 bar", "2 bars", "4 bars" };
-const juce::StringArray RiseVerbProcessor::rateChoices   { "1/4", "1/8", "1/16", "1/32" };
+const juce::StringArray RiseVerbProcessor::rateChoices   { "1/4", "1/8", "1/16", "1/32", juce::String::fromUTF8 ("Build \xe2\x86\x91") };
+const juce::StringArray RiseVerbProcessor::modeChoices   { "Smooth", "Gate", "Repeat" };
 
 static constexpr double kMaxCaptureSeconds = 60.0;
 static constexpr double kPreviewVocalSeconds = 2.5;
@@ -13,13 +14,13 @@ RiseVerbProcessor::RiseVerbProcessor()
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMS", createLayout())
 {
-    for (auto id : { "length", "size", "tone", "width", "rate", "depth", "output" })
+    for (auto id : { "length", "size", "tone", "width", "mode", "rate", "depth", "output" })
         apvts.addParameterListener (id, this);
 }
 
 RiseVerbProcessor::~RiseVerbProcessor()
 {
-    for (auto id : { "length", "size", "tone", "width", "rate", "depth", "output" })
+    for (auto id : { "length", "size", "tone", "width", "mode", "rate", "depth", "output" })
         apvts.removeParameterListener (id, this);
     pool.removeAllJobs (true, 10000);
 }
@@ -34,7 +35,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout RiseVerbProcessor::createLay
     p.push_back (std::make_unique<AudioParameterFloat>  (ParameterID { "size", 1 },   "Size",  NormalisableRange<float> (0.f, 1.f), 0.6f, pct));
     p.push_back (std::make_unique<AudioParameterFloat>  (ParameterID { "tone", 1 },   "Tone",  NormalisableRange<float> (0.f, 1.f), 0.6f, pct));
     p.push_back (std::make_unique<AudioParameterFloat>  (ParameterID { "width", 1 },  "Width", NormalisableRange<float> (0.f, 1.f), 0.8f, pct));
-    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "rate", 1 },   "Tremolo", rateChoices, 2));
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "mode", 1 },   "Stutter", modeChoices, 1));
+    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { "rate", 1 },   "Rate", rateChoices, 2));
     p.push_back (std::make_unique<AudioParameterFloat>  (ParameterID { "depth", 1 },  "Depth", NormalisableRange<float> (0.f, 1.f), 0.0f, pct));
     p.push_back (std::make_unique<AudioParameterFloat>  (ParameterID { "output", 1 }, "Output",
                      NormalisableRange<float> (-24.f, 6.f, 0.1f), 0.0f,
@@ -196,7 +198,7 @@ bool RiseVerbProcessor::hasRiser() const
 riser::Settings RiseVerbProcessor::currentSettings() const
 {
     static const double bars[] = { 0.5, 1.0, 2.0, 4.0 };
-    static const double divs[] = { 4.0, 8.0, 16.0, 32.0 };
+    static const double divs[] = { 4.0, 8.0, 16.0, 32.0, 0.0 };
 
     riser::Settings s;
     s.sampleRate   = sr;
@@ -205,7 +207,8 @@ riser::Settings RiseVerbProcessor::currentSettings() const
     s.size         = apvts.getRawParameterValue ("size")->load();
     s.tone         = apvts.getRawParameterValue ("tone")->load();
     s.width        = apvts.getRawParameterValue ("width")->load();
-    s.tremoloDiv   = divs[juce::jlimit (0, 3, (int) apvts.getRawParameterValue ("rate")->load())];
+    s.tremoloDiv   = divs[juce::jlimit (0, 4, (int) apvts.getRawParameterValue ("rate")->load())];
+    s.stutterMode  = juce::jlimit (0, 2, (int) apvts.getRawParameterValue ("mode")->load());
     s.tremoloDepth = apvts.getRawParameterValue ("depth")->load();
     s.outputDb     = apvts.getRawParameterValue ("output")->load();
     return s;

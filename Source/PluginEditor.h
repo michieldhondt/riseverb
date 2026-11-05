@@ -91,9 +91,9 @@ private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
     };
     Knob size, tone, width, depth, output;
-    juce::ComboBox lengthBox, rateBox;
-    juce::Label lengthLabel, rateLabel;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lengthAtt, rateAtt;
+    juce::ComboBox lengthBox, rateBox, modeBox;
+    juce::Label lengthLabel, rateLabel, modeLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> lengthAtt, rateAtt, modeAtt;
 
     std::unique_ptr<juce::FileChooser> chooser;
     int shownVersion = -1;

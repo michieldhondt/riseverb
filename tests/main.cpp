@@ -32,7 +32,7 @@ int main (int argc, char** argv)
 
     // change length to 2 bars via parameter -> editor timer re-renders
     p.apvts.getParameter ("length")->setValueNotifyingHost (p.apvts.getParameter ("length")->convertTo0to1 (2));
-    p.apvts.getParameter ("depth")->setValueNotifyingHost (0.5f);
+    p.apvts.getParameter ("depth")->setValueNotifyingHost (0.8f); p.apvts.getParameter ("rate")->setValueNotifyingHost (1.0f);
     for (int i = 0; i < 100; ++i) { MessageManager::getInstance()->runDispatchLoopUntil (20); }
     for (int i = 0; i < 300 && p.isRendering(); ++i) Thread::sleep (10);
     MessageManager::getInstance()->runDispatchLoopUntil (100);

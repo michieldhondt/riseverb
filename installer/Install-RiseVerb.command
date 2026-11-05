@@ -11,6 +11,6 @@ xattr -dr com.apple.quarantine "$COMP/RiseVerb.component" "$VST3/RiseVerb.vst3" 
 killall -9 AudioComponentRegistrar 2>/dev/null
 echo ""
 echo "RiseVerb is installed."
-echo "Restart Logic Pro. You'll find it under: Audio FX > Audio Units > Michiel > RiseVerb"
+echo "Restart Logic Pro. You'll find it under: Audio FX > Audio Units > M1lobeats > RiseVerb"
 echo ""
 read -n 1 -s -r -p "Press any key to close..."

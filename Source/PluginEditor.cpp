@@ -202,7 +202,7 @@ RiseVerbEditor::RiseVerbEditor (RiseVerbProcessor& p)
     : AudioProcessorEditor (&p), proc (p)
 {
     setLookAndFeel (&lnf);
-    setSize (720, 430);
+    setSize (760, 430);
 
     addAndMakeVisible (wave);
 
@@ -252,16 +252,20 @@ RiseVerbEditor::RiseVerbEditor (RiseVerbProcessor& p)
 
     lengthBox.addItemList (RiseVerbProcessor::lengthChoices, 1);
     rateBox.addItemList (RiseVerbProcessor::rateChoices, 1);
+    modeBox.addItemList (RiseVerbProcessor::modeChoices, 1);
+    modeAtt   = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "mode", modeBox);
     lengthAtt = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "length", lengthBox);
     rateAtt   = std::make_unique<AudioProcessorValueTreeState::ComboBoxAttachment> (proc.apvts, "rate", rateBox);
-    for (auto* l : { &lengthLabel, &rateLabel })
+    for (auto* l : { &lengthLabel, &rateLabel, &modeLabel })
     {
         l->setJustificationType (Justification::centred);
         l->setFont (FontOptions (11.0f, Font::bold));
         addAndMakeVisible (l);
     }
     lengthLabel.setText ("LENGTH", dontSendNotification);
-    rateLabel.setText ("TREMOLO", dontSendNotification);
+    rateLabel.setText ("RATE", dontSendNotification);
+    modeLabel.setText ("STUTTER", dontSendNotification);
+    addAndMakeVisible (modeBox);
     addAndMakeVisible (lengthBox);
     addAndMakeVisible (rateBox);
 
@@ -284,7 +288,7 @@ void RiseVerbEditor::paint (Graphics& g)
     g.drawText ("RISEVERB", head.removeFromLeft (150), Justification::centredLeft);
     g.setColour (rv::textDim);
     g.setFont (FontOptions (12.0f));
-    g.drawText ("vocal  ->  reverse reverb riser", head.removeFromLeft (260), Justification::centredLeft);
+    g.drawText ("by M1lobeats", head.removeFromLeft (260), Justification::centredLeft);
     g.drawText (String (proc.getBpm(), 1) + " BPM", head, Justification::centredRight);
 
     // control strip background
@@ -316,7 +320,7 @@ void RiseVerbEditor::resized()
     dragTile.setBounds (buttons);
 
     auto strip = Rectangle<int> (20, 300, getWidth() - 40, 116).reduced (10, 8);
-    const int cw = strip.getWidth() / 7;
+    const int cw = strip.getWidth() / 8;
 
     auto placeCombo = [&] (ComboBox& box, Label& label)
     {
@@ -334,6 +338,7 @@ void RiseVerbEditor::resized()
     placeKnob (size);
     placeKnob (tone);
     placeKnob (width);
+    placeCombo (modeBox, modeLabel);
     placeCombo (rateBox, rateLabel);
     placeKnob (depth);
     placeKnob (output);

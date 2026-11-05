@@ -63,7 +63,7 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
-    static const juce::StringArray lengthChoices, rateChoices;
+    static const juce::StringArray lengthChoices, rateChoices, modeChoices;
 
 private:
     void parameterChanged (const juce::String&, float) override;
